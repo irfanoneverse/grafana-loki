@@ -1,6 +1,12 @@
-# Ubuntu EC2 - Remove OpenTelemetry (Keep Grafana Alloy)
+# CIPS Ubuntu EC2 - Remove OpenTelemetry (Keep Grafana Alloy)
 
-This is a simplified cleanup guide for Ubuntu EC2 nodes where OpenTelemetry was used before, and now only Grafana Alloy is used.
+This is a simplified cleanup guide for the CIPS staging EC2 node where OpenTelemetry was used before, and now only Grafana Alloy is used.
+
+CIPS paths and labels:
+
+- Laravel app directory: `/data/cips`
+- Alloy directory: `/opt/monitoring/alloy-docker`
+- Instance name: `cips-staging`
 
 ## 1) Check what OpenTelemetry footprint still exists
 
@@ -15,7 +21,7 @@ ps aux | grep -Ei 'otel|opentelemetry|collector' | grep -v grep
 Run inside your Laravel app directory:
 
 ```bash
-cd /path/to/laravel-app
+cd /data/cips
 composer remove keepsuit/laravel-opentelemetry open-telemetry/sdk open-telemetry/exporter-otlp
 rm -f config/opentelemetry.php
 ```
@@ -31,6 +37,8 @@ grep -r "opentelemetry\|OpenTelemetry\|keepsuit" config/ bootstrap/ app/ 2>/dev/
 If any files appear (e.g. `app/Http/Middleware/TraceIdMiddleware.php`), remove the OTel dependency from them. For a middleware that only injected a trace ID into logs, replace the entire file with a safe no-op:
 
 ```bash
+test -f app/Http/Middleware/TraceIdMiddleware.php
+
 cat > app/Http/Middleware/TraceIdMiddleware.php << 'EOF'
 <?php
 namespace App\Http\Middleware;
@@ -51,7 +59,8 @@ EOF
 ### 2b) Remove OTEL\_\* variables from .env
 
 ```bash
-sed -i '/^OTEL_/d' /path/to/laravel-app/.env
+grep -n '^OTEL_' /data/cips/.env || true
+sed -i '/^OTEL_/d' /data/cips/.env
 ```
 
 Also remove from:
@@ -64,13 +73,14 @@ Also remove from:
 Running `composer` as root changes ownership of storage files, causing PHP-FPM to fail writing logs. Fix with:
 
 ```bash
-chown -R www-data:www-data /path/to/laravel-app/storage
-chown -R www-data:www-data /path/to/laravel-app/bootstrap/cache
+chown -R www-data:www-data /data/cips/storage
+chown -R www-data:www-data /data/cips/bootstrap/cache
 ```
 
 ### 2d) Clear Laravel caches
 
 ```bash
+cd /data/cips
 php artisan optimize:clear
 ```
 
@@ -121,6 +131,22 @@ cd /opt/monitoring/alloy-docker
 docker compose ps
 docker compose logs --tail=100 alloy
 curl -s http://127.0.0.1:12345/ | head -1
+```
+
+Confirm Alloy is using the CIPS values:
+
+```bash
+grep -nE 'INSTANCE_NAME|ENVIRONMENT|LARAVEL_LOG_DIR|HUB_IP' /opt/monitoring/alloy-docker/.env
+docker compose exec alloy env | grep -E 'INSTANCE_NAME|ENVIRONMENT|HUB_IP'
+```
+
+Expected CIPS values:
+
+```text
+INSTANCE_NAME=cips-staging
+ENVIRONMENT=staging
+LARAVEL_LOG_DIR=/data/cips/storage/logs
+HUB_IP=172.31.27.45
 ```
 
 If Alloy is healthy and no OpenTelemetry service/process/container remains, cleanup is complete.
