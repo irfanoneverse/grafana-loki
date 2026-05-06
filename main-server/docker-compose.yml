@@ -20,7 +20,6 @@ services:
       - loki-data:/loki
     ports:
       - "3100:3100" # HTTP API (receives logs from Alloy)
-      - "9096:9096" # gRPC
     healthcheck:
       test:
         [
@@ -49,7 +48,6 @@ services:
       - mimir-data:/data/mimir
     ports:
       - "9009:9009" # HTTP API (receives remote_write from Alloy)
-      - "9095:9095" # gRPC
     # Note: grafana/mimir:2.15.0 is a distroless image (no /bin/sh, no wget).
     # CMD-SHELL health checks cannot run. Mimir starts in ~2s (verified via logs).
     networks:
@@ -64,9 +62,9 @@ services:
     restart: unless-stopped
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=changeme # CHANGE THIS IN PRODUCTION
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
       - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_SERVER_ROOT_URL=http://3.0.120.197:3000 # Update to your domain
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:?set GRAFANA_ROOT_URL in .env}
       - GF_FEATURE_TOGGLES_ENABLE=metricsSummary
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro

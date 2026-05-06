@@ -39,12 +39,12 @@ Monitoring Hub EC2
 
 Recommended paths:
 
-| Server | Path | Purpose |
-| --- | --- | --- |
-| Monitoring hub EC2 | `/opt/grafana-main-hub` | Main stack repository |
+| Server             | Path                                | Purpose                            |
+| ------------------ | ----------------------------------- | ---------------------------------- |
+| Monitoring hub EC2 | `/opt/grafana-main-hub`             | Main stack repository              |
 | Monitoring hub EC2 | `/opt/grafana-main-hub/main-server` | Grafana, Loki, Mimir compose stack |
-| Client EC2 | `/opt/grafana-nodes` | Client repository copy |
-| Client EC2 | `/opt/grafana-nodes/alloy-docker` | Alloy agent stack |
+| Client EC2         | `/opt/grafana-nodes`                | Client repository copy             |
+| Client EC2         | `/opt/grafana-nodes/alloy-docker`   | Alloy agent stack                  |
 
 ## Requirements
 
@@ -55,7 +55,7 @@ Recommended paths:
 - Docker and Docker Compose plugin on every EC2 instance.
 - Security groups that allow client instances to reach the monitoring hub on Loki and Mimir ports.
 
-Recommended AWS region examples in this guide use `ap-southeast-1`. Replace it with your actual region.
+This guide assumes AWS region `ap-southeast-1` (Asia Pacific, Singapore).
 
 ## Deployment Variables
 
@@ -63,7 +63,7 @@ Set these values before running AWS commands:
 
 ```bash
 export AWS_REGION="ap-southeast-1"
-export OBS_BUCKET="YOUR_COMPANY-observability-data"
+export OBS_BUCKET="S3_BUCKET_NAME"
 export AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 export HUB_INSTANCE_ID="i-xxxxxxxxxxxxxxxxx"
 export GRAFANA_ROOT_URL="http://MONITORING_HUB_PUBLIC_IP/"
@@ -72,7 +72,7 @@ export GRAFANA_ADMIN_PASSWORD="CHANGE_THIS_PASSWORD"
 
 Replace:
 
-- `AWS_REGION` with the AWS region used by the EC2 instances and S3 bucket.
+- `AWS_REGION` only if you intentionally deploy outside `ap-southeast-1`.
 - `OBS_BUCKET` with a globally unique S3 bucket name.
 - `HUB_INSTANCE_ID` with the monitoring hub EC2 instance ID.
 - `GRAFANA_ROOT_URL` with the public URL, private URL, or DNS name used to access Grafana.
@@ -82,21 +82,13 @@ Replace:
 
 Create one private S3 bucket for Loki and Mimir storage.
 
-For most AWS regions:
+Create the bucket in `ap-southeast-1`:
 
 ```bash
 aws s3api create-bucket \
   --bucket "$OBS_BUCKET" \
   --region "$AWS_REGION" \
   --create-bucket-configuration LocationConstraint="$AWS_REGION"
-```
-
-For `us-east-1` only:
-
-```bash
-aws s3api create-bucket \
-  --bucket "$OBS_BUCKET" \
-  --region us-east-1
 ```
 
 Enable versioning:
@@ -106,6 +98,8 @@ aws s3api put-bucket-versioning \
   --bucket "$OBS_BUCKET" \
   --versioning-configuration Status=Enabled
 ```
+
+If you enable versioning, the lifecycle policy must also expire noncurrent object versions. Otherwise S3 expiration only creates delete markers and old object versions can continue consuming storage.
 
 Block all public access:
 
@@ -164,6 +158,9 @@ cat > /tmp/grafana-aws/s3-lifecycle-policy.json << 'EOJSON'
       ],
       "Expiration": {
         "Days": 100
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 7
       }
     }
   ]
@@ -201,17 +198,23 @@ cat > /tmp/grafana-aws/iam-policy-grafana-s3.json << EOJSON
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "GrafanaS3Access",
+      "Sid": "GrafanaS3BucketAccess",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": "arn:aws:s3:::$OBS_BUCKET"
+    },
+    {
+      "Sid": "GrafanaS3ObjectAccess",
       "Effect": "Allow",
       "Action": [
         "s3:PutObject",
         "s3:GetObject",
-        "s3:DeleteObject",
-        "s3:ListBucket",
-        "s3:GetBucketLocation"
+        "s3:DeleteObject"
       ],
       "Resource": [
-        "arn:aws:s3:::$OBS_BUCKET",
         "arn:aws:s3:::$OBS_BUCKET/*"
       ]
     }
@@ -227,6 +230,8 @@ aws iam create-policy \
   --policy-name GrafanaS3Access \
   --policy-document file:///tmp/grafana-aws/iam-policy-grafana-s3.json
 ```
+
+If a policy with this name already exists, reuse its ARN or create a new version instead of creating a duplicate policy with a different name.
 
 Create the EC2 trust policy:
 
@@ -272,11 +277,25 @@ aws iam add-role-to-instance-profile \
   --role-name GrafanaServerRole
 
 aws ec2 associate-iam-instance-profile \
+  --region "$AWS_REGION" \
   --instance-id "$HUB_INSTANCE_ID" \
   --iam-instance-profile Name=GrafanaServerProfile
 ```
 
-If the EC2 already has an instance profile attached, use `replace-iam-instance-profile-association` instead of `associate-iam-instance-profile`.
+If the EC2 already has an instance profile attached, use `replace-iam-instance-profile-association` instead of `associate-iam-instance-profile`:
+
+```bash
+ASSOCIATION_ID="$(aws ec2 describe-iam-instance-profile-associations \
+  --region "$AWS_REGION" \
+  --filters Name=instance-id,Values="$HUB_INSTANCE_ID" \
+  --query 'IamInstanceProfileAssociations[0].AssociationId' \
+  --output text)"
+
+aws ec2 replace-iam-instance-profile-association \
+  --region "$AWS_REGION" \
+  --association-id "$ASSOCIATION_ID" \
+  --iam-instance-profile Name=GrafanaServerProfile
+```
 
 Verify from the monitoring hub EC2:
 
@@ -288,6 +307,7 @@ aws s3 ls "s3://$OBS_BUCKET"
 ## 4. Configure Security Groups
 
 Use private networking wherever possible. Do not expose Loki or Mimir publicly.
+Loki and Mimir are unauthenticated in this single-node configuration, so security group restrictions are mandatory. Keep internal gRPC ports `9095` and `9096` closed to the public internet; the provided Compose file does not publish them.
 
 Recommended security groups:
 
@@ -296,18 +316,18 @@ Recommended security groups:
 
 Monitoring hub inbound rules:
 
-| Type | Port | Source | Purpose |
-| --- | ---: | --- | --- |
-| HTTP | `80` | Office/VPN CIDR | Grafana UI |
-| SSH | `22` | Office/VPN CIDR | Admin SSH |
-| Custom TCP | `3100` | `grafana-client` security group | Loki ingest from Alloy |
+| Type       |   Port | Source                          | Purpose                       |
+| ---------- | -----: | ------------------------------- | ----------------------------- |
+| HTTP       |   `80` | Office/VPN CIDR                 | Grafana UI                    |
+| SSH        |   `22` | Office/VPN CIDR                 | Admin SSH                     |
+| Custom TCP | `3100` | `grafana-client` security group | Loki ingest from Alloy        |
 | Custom TCP | `9009` | `grafana-client` security group | Mimir remote write from Alloy |
 
 Client EC2 inbound rules:
 
-| Type | Port | Source | Purpose |
-| --- | ---: | --- | --- |
-| SSH | `22` | Office/VPN CIDR | Admin SSH |
+| Type                 |         Port | Source                        | Purpose                      |
+| -------------------- | -----------: | ----------------------------- | ---------------------------- |
+| SSH                  |         `22` | Office/VPN CIDR               | Admin SSH                    |
 | HTTP/HTTPS/app ports | app-specific | Load balancer or allowed CIDR | Existing application traffic |
 
 Client EC2 outbound:
@@ -325,24 +345,28 @@ export APP_SG_ID="sg-appxxxxxxxx"
 export OFFICE_CIDR="x.x.x.x/32"
 
 aws ec2 authorize-security-group-ingress \
+  --region "$AWS_REGION" \
   --group-id "$HUB_SG_ID" \
   --protocol tcp \
   --port 3100 \
   --source-group "$APP_SG_ID"
 
 aws ec2 authorize-security-group-ingress \
+  --region "$AWS_REGION" \
   --group-id "$HUB_SG_ID" \
   --protocol tcp \
   --port 9009 \
   --source-group "$APP_SG_ID"
 
 aws ec2 authorize-security-group-ingress \
+  --region "$AWS_REGION" \
   --group-id "$HUB_SG_ID" \
   --protocol tcp \
   --port 80 \
   --cidr "$OFFICE_CIDR"
 
 aws ec2 authorize-security-group-ingress \
+  --region "$AWS_REGION" \
   --group-id "$HUB_SG_ID" \
   --protocol tcp \
   --port 22 \
@@ -353,7 +377,9 @@ aws ec2 authorize-security-group-ingress \
 
 Run these commands on the monitoring hub EC2.
 
-Install Docker, Compose, Git, and AWS CLI:
+Install Docker, Compose, Git, and AWS CLI.
+
+Important: `apt upgrade -y` and Docker installation can restart services. On an existing production host, run this during a maintenance window and consider pinning Docker versions through the official Docker apt repository instead of using the convenience installer.
 
 ```bash
 sudo apt update
@@ -404,12 +430,15 @@ Required values to update:
 - Loki S3 region and endpoint.
 - Mimir S3 bucket name.
 - Mimir S3 region and endpoint.
+- Mimir `native_aws_auth_enabled: true` when using the EC2 IAM instance profile.
 - Loki retention period.
-- Mimir retention period, if configured in your Mimir config.
+- Mimir retention period.
 
 Edit manually:
 
 ```bash
+cp .env.example .env
+nano .env
 nano docker-compose.yml
 nano loki-config.yaml
 nano mimir-config.yaml
@@ -419,9 +448,16 @@ Expected Grafana environment values:
 
 ```yaml
 GF_SECURITY_ADMIN_USER=admin
-GF_SECURITY_ADMIN_PASSWORD=CHANGE_THIS_PASSWORD
+GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
 GF_USERS_ALLOW_SIGN_UP=false
-GF_SERVER_ROOT_URL=http://MONITORING_HUB_PUBLIC_IP/
+GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:?set GRAFANA_ROOT_URL in .env}
+```
+
+Example `main-server/.env`:
+
+```env
+GRAFANA_ADMIN_PASSWORD=CHANGE_THIS_PASSWORD
+GRAFANA_ROOT_URL=http://MONITORING_HUB_PUBLIC_IP/
 ```
 
 If Grafana is mapped as `80:3000`, users access Grafana on:
@@ -481,6 +517,14 @@ Check S3 writes after the stack has been running:
 aws s3 ls "s3://$OBS_BUCKET" --recursive --summarize --human-readable | tail
 ```
 
+Verify write and delete permissions from the hub EC2:
+
+```bash
+echo test > /tmp/grafana-s3-test.txt
+aws s3 cp /tmp/grafana-s3-test.txt "s3://$OBS_BUCKET/test/grafana-s3-test.txt"
+aws s3 rm "s3://$OBS_BUCKET/test/grafana-s3-test.txt"
+```
+
 Open Grafana:
 
 ```text
@@ -501,7 +545,9 @@ In Grafana Explore:
 
 Run these commands on each application/client EC2.
 
-Install Docker, Compose, and Git:
+Install Docker, Compose, and Git.
+
+Important: `apt upgrade -y` and Docker installation can restart services. On an existing production application host, run this during a maintenance window and consider pinning Docker versions through the official Docker apt repository instead of using the convenience installer.
 
 ```bash
 sudo apt update
@@ -533,7 +579,6 @@ export INSTANCE_NAME="app-prod-01"
 export ENVIRONMENT="production"
 export TZ_NAME="Asia/Kuala_Lumpur"
 export LARAVEL_LOG_DIR="/path/to/laravel/storage/logs"
-export LARAVEL_APP_DIR="/path/to/laravel"
 ```
 
 Use the monitoring hub private IP for `HUB_IP` when the client and hub are in the same VPC.
@@ -578,9 +623,16 @@ Enable PHP-FPM status:
 ls -lah /etc/php/*/fpm/pool.d/www.conf
 grep -R "listen =" /etc/php/*/fpm/pool.d/www.conf
 
-sudo sed -i 's#^;*pm.status_path = .*#pm.status_path = /fpm-status#' /etc/php/*/fpm/pool.d/www.conf
-sudo systemctl restart php*-fpm
+export PHP_VERSION="8.2"
+export PHP_FPM_POOL="/etc/php/$PHP_VERSION/fpm/pool.d/www.conf"
+
+sudo cp "$PHP_FPM_POOL" "$PHP_FPM_POOL.bak"
+sudo sed -i 's#^;*pm.status_path = .*#pm.status_path = /fpm-status#' "$PHP_FPM_POOL"
+grep -q '^pm.status_path' "$PHP_FPM_POOL" || echo 'pm.status_path = /fpm-status' | sudo tee -a "$PHP_FPM_POOL"
+sudo systemctl reload "php$PHP_VERSION-fpm"
 ```
+
+Replace `PHP_VERSION` with the active PHP-FPM version on the host. Avoid editing every PHP-FPM pool on mixed-version servers.
 
 Confirm PHP-FPM is running:
 
@@ -614,7 +666,7 @@ Create the local-only Nginx status server:
 ```bash
 sudo tee /etc/nginx/conf.d/stub_status.conf > /dev/null << EONGINX
 server {
-    listen 8080;
+    listen 127.0.0.1:8080;
     server_name localhost;
 
     location = /nginx_status {
@@ -814,6 +866,7 @@ Check:
 - The IAM policy is named `GrafanaS3Access`.
 - The IAM policy bucket ARN matches the real bucket.
 - Loki and Mimir configs use the correct bucket name and region.
+- Mimir has `native_aws_auth_enabled: true` when using the EC2 IAM instance profile.
 - The hub EC2 can reach the regional S3 endpoint.
 
 Client cannot push logs or metrics:
@@ -868,10 +921,12 @@ Check:
 - Block S3 public access.
 - Restrict Grafana UI access to office/VPN IPs.
 - Restrict Loki and Mimir ports to client security groups or private CIDRs.
+- Keep Loki and Mimir internal gRPC ports `9096` and `9095` unpublished unless there is a specific private-network need.
 - Prefer private IPs for Alloy to hub traffic.
 - Do not expose Loki or Mimir directly to the public internet.
 - Use HTTPS for Grafana in production.
 - Rotate the Grafana admin password after first login.
+- Keep `main-server/.env` private and do not commit real passwords.
 
 ## 15. Cleanup
 
