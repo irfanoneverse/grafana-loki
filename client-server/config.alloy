@@ -6,8 +6,9 @@
 //
 // Collects: Logs (→ Loki), Metrics (→ Mimir)
 //
-// KEY: System metrics are built-in. Nginx & PHP-FPM metrics come from
-//      lightweight sidecar exporters in docker-compose.yml.
+// KEY: System metrics are built in. Nginx and PHP-FPM logs are collected
+//      from files, but service-level Nginx/PHP-FPM metrics are intentionally
+//      not enabled because they require extra status endpoints on the app host.
 //      Your Laravel app (Nginx, PHP-FPM) keeps running via systemctl as-is.
 //
 // IMPORTANT: Set HUB_IP in client-server/.env to the private IP of your
@@ -101,7 +102,7 @@ loki.write "loki_endpoint" {
 
 
 // ---------------------------------------------------------------------------
-// 2. METRICS — System metrics (built-in) + Nginx/PHP-FPM (sidecar exporters)
+// 2. METRICS — System metrics only
 // ---------------------------------------------------------------------------
 
 // --- System Metrics (replaces standalone Node Exporter) ---
@@ -119,34 +120,8 @@ prometheus.scrape "system_metrics" {
   forward_to      = [prometheus.relabel.add_instance_labels.receiver]
 }
 
-// --- Nginx Metrics ---
-// Scraped from the nginx-prometheus-exporter sidecar container (:9113).
-// The exporter reads Nginx stub_status from 127.0.0.1:8080/nginx_status
-// and converts it to Prometheus metrics.
-prometheus.scrape "nginx_metrics" {
-  targets = [
-    { __address__ = "127.0.0.1:9113" },
-  ]
-  scrape_interval = "30s"
-  job_name        = "nginx-exporter"
-  forward_to      = [prometheus.relabel.add_instance_labels.receiver]
-}
-
-// --- PHP-FPM Metrics ---
-// Scraped from the php-fpm_exporter sidecar container (:9253).
-// The exporter reads PHP-FPM status from 127.0.0.1:8080/fpm-status
-// and converts it to Prometheus metrics.
-prometheus.scrape "phpfpm_metrics" {
-  targets = [
-    { __address__ = "127.0.0.1:9253" },
-  ]
-  scrape_interval = "30s"
-  job_name        = "phpfpm-exporter"
-  forward_to      = [prometheus.relabel.add_instance_labels.receiver]
-}
-
 // --- Instance Labels ---
-// Add instance-identifying labels to all metrics from all exporters.
+// Add instance-identifying labels to all system metrics.
 prometheus.relabel "add_instance_labels" {
   forward_to = [prometheus.remote_write.mimir_endpoint.receiver]
 

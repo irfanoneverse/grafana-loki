@@ -21,8 +21,7 @@ One EC2 instance acts as the monitoring hub:
 Each application EC2 instance runs the client stack:
 
 - Grafana Alloy tails logs and sends them to Loki.
-- Exporters expose Nginx and PHP-FPM metrics locally.
-- Alloy sends metrics to Mimir.
+- Grafana Alloy collects system metrics and sends them to Mimir.
 - Client EC2 instances do not need S3 access.
 
 Data flow:
@@ -30,7 +29,7 @@ Data flow:
 ```text
 Application EC2
   Laravel, Nginx, PHP-FPM logs
-  Nginx and PHP-FPM metrics
+  CPU, memory, disk, filesystem, network metrics
         |
         v
   client-server Alloy stack
@@ -251,8 +250,6 @@ Log out and back in:
 exit
 ```
 
-Create local Nginx and PHP-FPM status endpoints as described in [client-server.md](client-server.md).
-
 Clone and configure:
 
 ```text
@@ -288,8 +285,6 @@ Validate:
 
 ```text
 curl -s http://127.0.0.1:12345/ | head -1
-curl -s http://127.0.0.1:9113/metrics | head -5
-curl -s http://127.0.0.1:9253/metrics | head -5
 nc -vz MONITORING_HUB_PRIVATE_IP 3100
 nc -vz MONITORING_HUB_PRIVATE_IP 9009
 ```
@@ -318,8 +313,8 @@ Mimir examples:
 up
 up{instance="app-prod-01"}
 node_uname_info{instance="app-prod-01"}
-nginx_connections_active{instance="app-prod-01"}
-phpfpm_up{instance="app-prod-01"}
+100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle", instance="app-prod-01"}[5m])) * 100)
+100 - ((node_filesystem_avail_bytes{instance="app-prod-01", fstype=~"ext[234]|btrfs|xfs|zfs", mountpoint!~".*boot.*"} * 100) / node_filesystem_size_bytes{instance="app-prod-01", fstype=~"ext[234]|btrfs|xfs|zfs", mountpoint!~".*boot.*"})
 ```
 
 ## 8. Troubleshooting
@@ -345,11 +340,12 @@ No logs:
 2. Confirm Docker Compose mounted that path.
 3. Confirm Laravel is writing log files.
 
-No Nginx or PHP-FPM metrics:
+No system metrics:
 
-1. Confirm `http://127.0.0.1:8080/nginx_status` works on the client.
-2. Confirm `http://127.0.0.1:8080/fpm-status` works on the client.
-3. Confirm the PHP-FPM socket in `stub_status.conf` is correct.
+1. Confirm Mimir is running on the hub.
+2. Confirm the client can reach the hub on TCP `9009`.
+3. Check Alloy logs on the client for `prometheus.remote_write` errors.
+4. Confirm the client compose file mounts `/proc`, `/sys`, and `/` read-only into Alloy.
 
 ## 9. Security Notes
 

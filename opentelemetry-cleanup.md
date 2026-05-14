@@ -25,7 +25,7 @@ docker ps
 If the Compose directory is unavailable, stop only the known monitoring containers:
 
 ```text
-docker stop alloy nginx-exporter phpfpm-exporter
+docker stop alloy
 docker ps
 ```
 

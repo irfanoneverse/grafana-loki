@@ -15,8 +15,6 @@
 #
 # PREREQUISITES:
 #   - Docker and Docker Compose installed on the Laravel EC2
-#   - Nginx stub_status enabled (port 8080)
-#   - PHP-FPM pm.status_path enabled
 #
 # IMPORTANT: Before running, create .env from .env.example and set:
 #   1. HUB_IP → your monitoring hub private IP
@@ -29,8 +27,9 @@ services:
   # Grafana Alloy — Unified Collector Agent
   # ---------------------------------------------------------------------------
   # Collects logs and system metrics from the host.
-  # Uses host networking so it can access localhost endpoints.
-  # Nginx and PHP-FPM metrics come from lightweight sidecar exporters below.
+  # Uses host networking for simple local host access.
+  # Nginx and PHP-FPM log files are collected, but service-level exporter
+  # metrics are intentionally not enabled.
   # ---------------------------------------------------------------------------
   alloy:
     image: grafana/alloy:v1.8.3
@@ -74,37 +73,6 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-    depends_on:
-      - nginx-exporter
-      - phpfpm-exporter
-
-  # ---------------------------------------------------------------------------
-  # Nginx Prometheus Exporter — Converts stub_status to Prometheus metrics
-  # ---------------------------------------------------------------------------
-  # Reads Nginx stub_status from 127.0.0.1:8080/nginx_status and exposes
-  # Prometheus metrics on :9113/metrics. Alloy scrapes this endpoint.
-  # ---------------------------------------------------------------------------
-  nginx-exporter:
-    image: nginx/nginx-prometheus-exporter:1.4
-    container_name: nginx-exporter
-    restart: unless-stopped
-    command:
-      - --nginx.scrape-uri=http://127.0.0.1:8080/nginx_status
-    network_mode: host
-
-  # ---------------------------------------------------------------------------
-  # PHP-FPM Prometheus Exporter — Converts fpm-status to Prometheus metrics
-  # ---------------------------------------------------------------------------
-  # Reads PHP-FPM status from 127.0.0.1:8080/fpm-status and exposes
-  # Prometheus metrics on :9253/metrics. Alloy scrapes this endpoint.
-  # ---------------------------------------------------------------------------
-  phpfpm-exporter:
-    image: hipages/php-fpm_exporter:2
-    container_name: phpfpm-exporter
-    restart: unless-stopped
-    environment:
-      - PHP_FPM_SCRAPE_URI=http://127.0.0.1:8080/fpm-status
-    network_mode: host
 
 volumes:
   alloy-data:
