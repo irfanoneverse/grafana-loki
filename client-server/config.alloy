@@ -2,8 +2,7 @@
 // Grafana Alloy Configuration — Docker Deployment (Laravel Application Node)
 // =============================================================================
 // This config is designed to run inside a Docker container with host networking.
-// It is functionally identical to the systemd version (../alloy/config.alloy),
-// but is deployed via Docker Compose instead of a systemd service.
+// It is deployed via Docker Compose instead of a systemd service.
 //
 // Collects: Logs (→ Loki), Metrics (→ Mimir)
 //
@@ -11,18 +10,20 @@
 //      lightweight sidecar exporters in docker-compose.yml.
 //      Your Laravel app (Nginx, PHP-FPM) keeps running via systemctl as-is.
 //
-// IMPORTANT: Set HUB_IP in alloy-docker/.env to the private IP of your
-//            observability EC2 (Grafana hub: 172.31.27.45).
+// IMPORTANT: Set HUB_IP in client-server/.env to the private IP of your
+//            observability EC2, for example 10.0.1.50.
 // =============================================================================
 
 // ---------------------------------------------------------------------------
 // 1. LOGS — Tail Laravel log files and ship to Loki
 // ---------------------------------------------------------------------------
 
-// Discover local log files
+// Discover local log files.
+// Laravel apps often write multiple channel logs into the same storage/logs
+// directory. Collect all .log files and label them by channel.
 local.file_match "laravel_logs" {
   path_targets = [
-    // Laravel application log (mounted from host)
+    // Laravel application and channel logs (mounted from host)
     { __path__ = "/host/logs/laravel/*.log", job = "laravel", app = "laravel" },
     // Nginx access and error logs (mounted from host)
     { __path__ = "/host/logs/nginx/access.log", job = "nginx", app = "nginx" },
@@ -47,14 +48,17 @@ loki.process "laravel_pipeline" {
   // Add the hostname as a label
   stage.static_labels {
     values = {
-      hostname = env("HOSTNAME"),
-      instance = env("INSTANCE_NAME"),
+      hostname     = env("HOSTNAME"),
+      instance     = env("INSTANCE_NAME"),
+      environment  = env("ENVIRONMENT"),
+      private_ipv4 = env("PRIVATE_IPV4"),
+      public_ipv4  = env("PUBLIC_IPV4"),
     }
   }
 
   // Parse Laravel log format: [YYYY-MM-DD HH:MM:SS] environment.LEVEL: message
   stage.regex {
-    expression = "^\\[(?P<timestamp>\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}\\.?\\d*)\\]\\s+(?P<environment>\\w+)\\.(?P<level>\\w+):\\s+(?P<message>.*)$"
+    expression = "^\\[(?P<timestamp>\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}\\.?\\d*)\\]\\s+(?P<log_environment>\\w+)\\.(?P<level>\\w+):\\s+(?P<message>.*)$"
   }
 
   // Set the timestamp from the log line
@@ -69,8 +73,8 @@ loki.process "laravel_pipeline" {
   // Promote parsed fields to labels
   stage.labels {
     values = {
-      level       = "level",
-      environment = "environment",
+      level           = "level",
+      log_environment = "log_environment",
     }
   }
 
@@ -153,6 +157,18 @@ prometheus.relabel "add_instance_labels" {
   rule {
     target_label = "environment"
     replacement  = env("ENVIRONMENT")
+  }
+  rule {
+    target_label = "hostname"
+    replacement  = env("HOSTNAME")
+  }
+  rule {
+    target_label = "private_ipv4"
+    replacement  = env("PRIVATE_IPV4")
+  }
+  rule {
+    target_label = "public_ipv4"
+    replacement  = env("PUBLIC_IPV4")
   }
 }
 

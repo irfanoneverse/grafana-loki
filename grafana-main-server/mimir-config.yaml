@@ -19,7 +19,7 @@ common:
     backend: s3
     s3:
       endpoint: s3.ap-southeast-1.amazonaws.com # Change to your region
-      bucket_name: oneone-grafana-bucket
+      bucket_name: your-company-observability-data
       region: ap-southeast-1 # Change to your region
       native_aws_auth_enabled: true
       # IAM Instance Profile is used for authentication — no keys needed.

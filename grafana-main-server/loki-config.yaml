@@ -18,7 +18,7 @@ common:
   storage:
     s3:
       endpoint: s3.ap-southeast-1.amazonaws.com # Change to your region
-      bucketnames: oneone-grafana-bucket
+      bucketnames: your-company-observability-data
       region: ap-southeast-1 # Change to your region
       # access_key_id and secret_access_key are NOT set here.
       # Loki uses the IAM Instance Profile attached to the EC2 instance.

@@ -21,6 +21,7 @@
 # IMPORTANT: Before running, create .env from .env.example and set:
 #   1. HUB_IP → your monitoring hub private IP
 #   2. INSTANCE_NAME → unique name per EC2
+#   3. LARAVEL_LOG_DIR → Laravel storage/logs path on this EC2
 # =============================================================================
 
 services:
@@ -50,18 +51,20 @@ services:
       - /sys:/host/sys:ro
       - /:/host/root:ro
       # Laravel log files (read-only)
-      - ${LARAVEL_LOG_DIR:-/path/to/laravel/storage/logs}:/host/logs/laravel:ro
+      - ${LARAVEL_LOG_DIR:?set LARAVEL_LOG_DIR in .env}:/host/logs/laravel:ro
       # Nginx and PHP-FPM logs (read-only)
       - /var/log/nginx:/host/logs/nginx:ro
       - /var/log:/host/logs/system:ro
       # Persistent storage for Alloy's WAL (Write-Ahead Log)
       - alloy-data:/var/lib/alloy/data
     environment:
-      - HOSTNAME=${HOSTNAME:-cips-staging}
-      - INSTANCE_NAME=${INSTANCE_NAME:-cips-staging}
-      - ENVIRONMENT=${ENVIRONMENT:-staging}
+      - HOSTNAME=${HOSTNAME:?set HOSTNAME in .env}
+      - INSTANCE_NAME=${INSTANCE_NAME:?set INSTANCE_NAME in .env}
+      - ENVIRONMENT=${ENVIRONMENT:?set ENVIRONMENT in .env}
       - TZ_NAME=${TZ_NAME:-Asia/Kuala_Lumpur}
-      - HUB_IP=${HUB_IP:-172.31.27.45}
+      - PRIVATE_IPV4=${PRIVATE_IPV4:-unknown}
+      - PUBLIC_IPV4=${PUBLIC_IPV4:-unknown}
+      - HUB_IP=${HUB_IP:?set HUB_IP in .env}
     healthcheck:
       test:
         [
