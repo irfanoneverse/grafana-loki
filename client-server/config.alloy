@@ -1,42 +1,22 @@
 // =============================================================================
 // Grafana Alloy Configuration — Docker Deployment (Laravel Application Node)
 // =============================================================================
-// This config is designed to run inside a Docker container with host networking.
-// It is deployed via Docker Compose instead of a systemd service.
+// Collects Laravel app logs and ships them to a central Loki instance.
+// Run via Docker Compose. Does not touch your app or its services.
 //
-// Collects: Logs (→ Loki), Metrics (→ Mimir)
-//
-// KEY: System metrics are built in. Nginx and PHP-FPM logs are collected
-//      from files, but service-level Nginx/PHP-FPM metrics are intentionally
-//      not enabled because they require extra status endpoints on the app host.
-//      Your Laravel app (Nginx, PHP-FPM) keeps running via systemctl as-is.
-//
-// IMPORTANT: Set HUB_IP in client-server/.env to the private IP of your
-//            observability EC2, for example 10.0.1.50.
+// IMPORTANT: Set HUB_IP in .env to the private IP of your Loki server.
 // =============================================================================
 
 // ---------------------------------------------------------------------------
 // 1. LOGS — Tail Laravel log files and ship to Loki
 // ---------------------------------------------------------------------------
 
-// Discover local log files.
-// Laravel apps often write multiple channel logs into the same storage/logs
-// directory. Collect all .log files and label them by channel.
 local.file_match "laravel_logs" {
   path_targets = [
-    // Laravel application and channel logs (mounted from host)
     { __path__ = "/host/logs/laravel/*.log", job = "laravel", app = "laravel" },
-    // Nginx access and error logs (mounted from host)
-    { __path__ = "/host/logs/nginx/access.log", job = "nginx", app = "nginx" },
-    { __path__ = "/host/logs/nginx/error.log",  job = "nginx", app = "nginx" },
-    // PHP-FPM logs (mounted from host)
-    { __path__ = "/host/logs/system/php*-fpm.log", job = "php-fpm", app = "php-fpm" },
-    // Syslog (optional, useful for system-level debugging)
-    { __path__ = "/host/logs/system/syslog", job = "syslog", app = "system" },
   ]
 }
 
-// Tail and ship logs to Loki
 loki.source.file "log_scrape" {
   targets    = local.file_match.laravel_logs.targets
   forward_to = [loki.process.laravel_pipeline.receiver]
@@ -44,9 +24,7 @@ loki.source.file "log_scrape" {
   tail_from_end = true
 }
 
-// Process logs: add labels, parse Laravel log format
 loki.process "laravel_pipeline" {
-  // Add the hostname as a label
   stage.static_labels {
     values = {
       hostname     = env("HOSTNAME"),
@@ -62,16 +40,13 @@ loki.process "laravel_pipeline" {
     expression = "^\\[(?P<timestamp>\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}\\.?\\d*)\\]\\s+(?P<log_environment>\\w+)\\.(?P<level>\\w+):\\s+(?P<message>.*)$"
   }
 
-  // Set the timestamp from the log line
-  // Laravel logs use server local time (no timezone in the format),
-  // so we must specify the server's timezone to avoid clock skew.
+  // Laravel logs use server local time; TZ_NAME prevents clock skew in Loki.
   stage.timestamp {
     source   = "timestamp"
     format   = "2006-01-02 15:04:05"
     location = env("TZ_NAME")
   }
 
-  // Promote parsed fields to labels
   stage.labels {
     values = {
       level           = "level",
@@ -93,63 +68,8 @@ loki.process "laravel_pipeline" {
   forward_to = [loki.write.loki_endpoint.receiver]
 }
 
-// Write logs to the central Loki instance
 loki.write "loki_endpoint" {
   endpoint {
     url = "http://" + env("HUB_IP") + ":3100/loki/api/v1/push"
-  }
-}
-
-
-// ---------------------------------------------------------------------------
-// 2. METRICS — System metrics only
-// ---------------------------------------------------------------------------
-
-// --- System Metrics (replaces standalone Node Exporter) ---
-// Reads from the HOST's /proc and /sys (mounted into the container).
-prometheus.exporter.unix "system" {
-  procfs_path = "/host/proc"
-  sysfs_path  = "/host/sys"
-  rootfs_path = "/host/root"
-}
-
-prometheus.scrape "system_metrics" {
-  targets         = prometheus.exporter.unix.system.targets
-  scrape_interval = "30s"
-  job_name        = "node-exporter"
-  forward_to      = [prometheus.relabel.add_instance_labels.receiver]
-}
-
-// --- Instance Labels ---
-// Add instance-identifying labels to all system metrics.
-prometheus.relabel "add_instance_labels" {
-  forward_to = [prometheus.remote_write.mimir_endpoint.receiver]
-
-  rule {
-    target_label = "instance"
-    replacement  = env("INSTANCE_NAME")
-  }
-  rule {
-    target_label = "environment"
-    replacement  = env("ENVIRONMENT")
-  }
-  rule {
-    target_label = "hostname"
-    replacement  = env("HOSTNAME")
-  }
-  rule {
-    target_label = "private_ipv4"
-    replacement  = env("PRIVATE_IPV4")
-  }
-  rule {
-    target_label = "public_ipv4"
-    replacement  = env("PUBLIC_IPV4")
-  }
-}
-
-// Remote write metrics to the central Mimir instance
-prometheus.remote_write "mimir_endpoint" {
-  endpoint {
-    url = "http://" + env("HUB_IP") + ":9009/api/v1/push"
   }
 }

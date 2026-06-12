@@ -1,36 +1,18 @@
 # =============================================================================
 # Docker Compose — Monitoring Agent Stack (Laravel App EC2)
 # =============================================================================
-# Deploys the observability agent (Grafana Alloy) as a Docker container
-# on each Laravel EC2 instance.
+# Deploys Grafana Alloy to collect Laravel logs and ship them to Loki.
+# Leaves your Laravel app (Nginx, PHP-FPM) running natively via systemctl.
 #
-# WHAT THIS DOES:
-#   - Runs Alloy in Docker to collect logs and metrics
-#   - Leaves your Laravel app (Nginx, PHP-FPM) running natively via systemctl
-#   - If monitoring breaks: `docker compose down` — app is completely unaffected
+# PREREQUISITES: Docker and Docker Compose installed on the app server.
 #
-# WHAT THIS DOES NOT DO:
-#   - Does NOT containerize Nginx, PHP-FPM, or your Laravel app
-#   - Does NOT require any changes to your application code
-#
-# PREREQUISITES:
-#   - Docker and Docker Compose installed on the Laravel EC2
-#
-# IMPORTANT: Before running, create .env from .env.example and set:
-#   1. HUB_IP → your monitoring hub private IP
-#   2. INSTANCE_NAME → unique name per EC2
-#   3. LARAVEL_LOG_DIR → Laravel storage/logs path on this EC2
+# BEFORE RUNNING: create .env from .env.example and set:
+#   1. HUB_IP          → private IP of your Loki server
+#   2. INSTANCE_NAME   → unique name per EC2
+#   3. LARAVEL_LOG_DIR → path to Laravel storage/logs on this EC2
 # =============================================================================
 
 services:
-  # ---------------------------------------------------------------------------
-  # Grafana Alloy — Unified Collector Agent
-  # ---------------------------------------------------------------------------
-  # Collects logs and system metrics from the host.
-  # Uses host networking for simple local host access.
-  # Nginx and PHP-FPM log files are collected, but service-level exporter
-  # metrics are intentionally not enabled.
-  # ---------------------------------------------------------------------------
   alloy:
     image: grafana/alloy:v1.8.3
     container_name: alloy
@@ -41,20 +23,9 @@ services:
       - --server.http.listen-addr=0.0.0.0:12345
       - --storage.path=/var/lib/alloy/data
     network_mode: host
-    pid: host
     volumes:
-      # Alloy configuration
       - ./config.alloy:/etc/alloy/config.alloy:ro
-      # Host filesystem access for system metrics (replaces Node Exporter)
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/host/root:ro
-      # Laravel log files (read-only)
       - ${LARAVEL_LOG_DIR:?set LARAVEL_LOG_DIR in .env}:/host/logs/laravel:ro
-      # Nginx and PHP-FPM logs (read-only)
-      - /var/log/nginx:/host/logs/nginx:ro
-      - /var/log:/host/logs/system:ro
-      # Persistent storage for Alloy's WAL (Write-Ahead Log)
       - alloy-data:/var/lib/alloy/data
     environment:
       - HOSTNAME=${HOSTNAME:?set HOSTNAME in .env}
