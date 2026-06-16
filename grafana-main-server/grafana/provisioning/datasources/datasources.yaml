@@ -1,31 +1,15 @@
 # =============================================================================
 # Grafana Provisioning — Datasources
 # =============================================================================
-# Automatically configures Mimir and Loki as datasources.
-# =============================================================================
 
 apiVersion: 1
 
 datasources:
-  # ---------------------------------------------------------------------------
-  # Mimir (Prometheus-compatible metrics)
-  # ---------------------------------------------------------------------------
-  - name: Mimir
-    type: prometheus
-    uid: mimir
-    access: proxy
-    url: http://mimir:9009/prometheus
-    isDefault: true
-    jsonData:
-      httpMethod: POST
-
-  # ---------------------------------------------------------------------------
-  # Loki (Log aggregation)
-  # ---------------------------------------------------------------------------
   - name: Loki
     type: loki
     uid: loki
     access: proxy
     url: http://loki:3100
+    isDefault: true
     jsonData:
       maxLines: 1000
